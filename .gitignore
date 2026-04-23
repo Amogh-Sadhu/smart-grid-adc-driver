@@ -1,0 +1,13 @@
+.Module.symvers.cmd
+.modules.order.cmd
+.smart_grid_adc.ko.cmd
+.smart_grid_adc.mod.cmd
+.smart_grid_adc.mod.o.cmd
+.smart_grid_adc.o.cmd
+.vscode/
+smart_grid_adc.mod
+smart_grid_adc.mod.c
+smart_grid_adc.mod.o
+smart_grid_adc.o
+Module.symvers
+modules.order
