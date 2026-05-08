@@ -1,91 +1,151 @@
 #include <linux/device.h>
 #include <linux/module.h>
-#include <linux/spi/spi.h>
+#include <linux/platform_device.h>
+#include <linux/mod_devicetable.h>
+#include <linux/io.h>
 #include <linux/iio/iio.h>
 #include <linux/mutex.h>
 
 struct bbAdc_state {
-    struct spi_device *spi;
+    void __iomem *base;
     struct mutex lock;
+    struct platform_device *pdev;
 };
 
-static int bbAdc_setup(struct bbAdc_state *st)
-{
+/* Register Offsets from TRM Page 1842 */
+#define ADC_CTRL          0x40
+#define ADC_STEPENABLE    0x54
+#define ADC_STEPCONFIG1   0x64
+#define ADC_FIFO0DATA     0x100
+
+/* Configuration Bits */
+#define CNTRL_STEPCONFIG_WR_PROT  BIT(2)
+#define CNTRL_ENABLE              BIT(0)
+#define STEPCONFIG_MODE_SW_ONESHOT (0 << 0)
+#define STEPCONFIG_INP_AN0        (0 << 19) // Channel 0
+#define STEPCONFIG_FIFO_0         (0 << 26)
+
+static const struct iio_chan_spec bbAdc_channels[] = {
+    {
+        .type = IIO_VOLTAGE,
+        .indexed = 1,
+        .channel = 0,
+        .info_mask_separate = BIT(IIO_CHAN_INFO_RAW),
+        .info_mask_shared_by_type = BIT(IIO_CHAN_INFO_SCALE),
+    },
+};
+
+static int bbAdc_setup(struct bbAdc_state *st){
+
+    iowrite32(CNTRL_STEPCONFIG_WR_PROT, st->base + ADC_CTRL);
+
+    iowrite32(STEPCONFIG_MODE_SW_ONESHOT | STEPCONFIG_INP_AN0 | STEPCONFIG_FIFO_0,
+
+    st->base + ADC_STEPCONFIG1);
+
+    iowrite32(CNTRL_ENABLE | CNTRL_STEPCONFIG_WR_PROT, st->base + ADC_CTRL);
+
     return 0;
 }
-
+ 
 static int bbAdc_read_raw(struct iio_dev *indio_dev,
                const struct iio_chan_spec *chan,
                int *val, int *val2, long info)
 {
-    // Logic for reading from SPI will go here
-    return 0;
-}
+    struct bbAdc_state *st = iio_priv(indio_dev);
 
-static int bbAdc_write_raw(struct iio_dev *indio_dev,
-                struct iio_chan_spec const *chan,
-                int val, int val2, long info)
-{
-    return 0;
+    switch (info)
+    {
+    case IIO_CHAN_INFO_RAW:
+        mutex_lock(&st->lock);
+
+        iowrite32(BIT(1), st->base + ADC_STEPENABLE);
+
+        //Waiting for hardware to finish conversion
+        while (ioread32(st->base + ADC_STEPENABLE) & BIT(1)); 
+
+        *val = ioread32(st->base + ADC_FIFO0DATA) & 0xFFF;
+
+        // Read the raw value from the ADC FIFO register
+        mutex_unlock(&st->lock);
+        return IIO_VAL_INT;
+        break;
+    
+    case IIO_CHAN_INFO_SCALE:
+        
+        *val = 1800;   // Millivolts
+        *val2 = 4096;  // Total steps for 12-bit
+        return IIO_VAL_FRACTIONAL;
+        break;
+    
+    default:
+        return -EINVAL;
+        break;
+    }
 }
 
 /* --- 2. IIO Info (references the functions above) --- */
-
 static const struct iio_info bbAdc_info = {
     .read_raw = bbAdc_read_raw,
-    .write_raw = bbAdc_write_raw,
 };
 
 /* --- 3. Probe and Remove --- */
-
-static int bbAdc_probe(struct spi_device *spi)
+static int bbAdc_probe(struct platform_device *pdev)
 {
     struct iio_dev *indio_dev;
     struct bbAdc_state *st;
+    struct resource *res;
 
-    indio_dev = devm_iio_device_alloc(&spi->dev, sizeof(*st));
+    indio_dev = devm_iio_device_alloc(&pdev->dev, sizeof(*st));
     if (!indio_dev)
         return -ENOMEM;
 
     st = iio_priv(indio_dev);
-    st->spi = spi;
+
+    res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+
+    st->base = devm_ioremap_resource(&pdev->dev, res);
+    if (IS_ERR(st->base))
+        return PTR_ERR(st->base);
+    
+    st->pdev = pdev;    //storing it just in case we need it later for some reasons
     mutex_init(&st->lock);
 
-    indio_dev->name = "smart-grid-adc";
+    indio_dev->name = "smart_grid_adc";
     indio_dev->info = &bbAdc_info;
     indio_dev->modes = INDIO_DIRECT_MODE;
+    indio_dev->channels = bbAdc_channels;
+    indio_dev->num_channels = ARRAY_SIZE(bbAdc_channels);
 
-    // Optional: Call your setup function here
     bbAdc_setup(st);
 
-    return devm_iio_device_register(&spi->dev, indio_dev);
+    return devm_iio_device_register(&pdev->dev, indio_dev);
 }
 
-static int bbAdc_remove(struct spi_device *spi)
+static int bbAdc_remove(struct platform_device *pdev)
 {
     // devm handles the cleanup, but you can add custom logic here
     return 0;
 }  
 
-/* --- 4. Boilerplate and Registration --- */
-
-static const struct spi_device_id bbAdc_id[] = {
-    { "smart-grid-adc", 0 },
-    { }
-};
-MODULE_DEVICE_TABLE(spi, bbAdc_id);
-
-static struct spi_driver bbAdc_driver = {
-    .driver = {
-        .name = "smart-grid-adc",
-        .owner = THIS_MODULE,
-    },
-    .probe = bbAdc_probe,
-    .remove = bbAdc_remove,
-    .id_table = bbAdc_id,
+static const struct of_device_id bbAdc_of_match[] = {
+    { .compatible = "ti,am3359-tscadc", }, // Standard BBB ADC string
+    { },
 };
 
-module_spi_driver(bbAdc_driver);
+MODULE_DEVICE_TABLE(of, bbAdc_of_match);
+
+static struct platform_driver bbAdc_driver = {
+.driver = {
+    .name = "bb-adc",
+    .of_match_table = bbAdc_of_match,
+    .owner = THIS_MODULE,
+},
+.probe = bbAdc_probe,
+.remove = bbAdc_remove,
+};
+
+module_platform_driver(bbAdc_driver);
 
 MODULE_AUTHOR("Amogh Sadhu <amoghsadhu27@gmail.com>");
 MODULE_DESCRIPTION("ADC driver for beaglebone black");
