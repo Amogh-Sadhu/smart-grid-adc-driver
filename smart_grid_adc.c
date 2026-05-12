@@ -12,13 +12,13 @@ struct bbAdc_state {
     struct platform_device *pdev;
 };
 
-/* Register Offsets from TRM Page 1842 */
+// https://www.ti.com/lit/ug/spruh73q/spruh73q.pdf?ts=1778524544137&ref_url=https%253A%252F%252Fwww.ti.com%252Fproduct%252FAM3358
+// From page 1831 of the datasheet it is about the TSCADC module.
 #define ADC_CTRL          0x40
 #define ADC_STEPENABLE    0x54
 #define ADC_STEPCONFIG1   0x64
 #define ADC_FIFO0DATA     0x100
 
-/* Configuration Bits */
 #define CNTRL_STEPCONFIG_WR_PROT  BIT(2)
 #define CNTRL_ENABLE              BIT(0)
 #define STEPCONFIG_MODE_SW_ONESHOT (0 << 0)
@@ -84,12 +84,12 @@ static int bbAdc_read_raw(struct iio_dev *indio_dev,
     }
 }
 
-/* --- 2. IIO Info (references the functions above) --- */
+
 static const struct iio_info bbAdc_info = {
     .read_raw = bbAdc_read_raw,
 };
 
-/* --- 3. Probe and Remove --- */
+
 static int bbAdc_probe(struct platform_device *pdev)
 {
     struct iio_dev *indio_dev;
@@ -124,7 +124,6 @@ static int bbAdc_probe(struct platform_device *pdev)
 
 static int bbAdc_remove(struct platform_device *pdev)
 {
-    // devm handles the cleanup, but you can add custom logic here
     return 0;
 }  
 
